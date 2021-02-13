@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net"
 	"runtime"
 	"syscall"
 
@@ -16,107 +15,145 @@ import (
 	"github.com/vishvananda/netlink"
 )
 
-type SimpleBridge struct {
+type NetInfo struct {
 	BridgeName string `json:"bridgeName"`
-	IP         string `json:"ip"`
+	BridgeIP   string `json:"bridgeIP"`
+	VethConIP  string `json:"vethConIP"`
 }
 
-func init(){
+func init() {
 	runtime.LockOSThread()
 }
 
 func cmdAdd(args *skel.CmdArgs) error {
-	sb := SimpleBridge{}
-	if err := json.Unmarshal(args.StdinData, &sb); err != nil{
+	netInfo := NetInfo{}
+	if err := json.Unmarshal(args.StdinData, &netInfo); err != nil {
 		return err
 	}
-	fmt.Println(sb)
-
+	fmt.Println(netInfo)
 
 	br := &netlink.Bridge{
 		LinkAttrs: netlink.LinkAttrs{
-			Name: sb.BridgeName,
-			MTU: 1500, // (not including a 4 byte header)
+			Name: netInfo.BridgeName,
+			MTU:  1500, // (not including a 4 byte header)
 
 			// Let kernel use default txqueuelen; leaving it unset
-            // means 0, and a zero-length TX queue messes up FIFO
-            // traffic shapers which use TX queue length as the
-            // default packet limit
+			// means 0, and a zero-length TX queue messes up FIFO
+			// traffic shapers which use TX queue length as the
+			// default packet limit
 			TxQLen: -1, // Le the kernel decide by itself. It knows best.
 		},
 	}
 
 	err := netlink.LinkAdd(br)
-
-	if err!=nil &&  err != syscall.EEXIST{
-		return err
-	}
-	
-	// same as ip link set $BRIDGE_NAME up
-	if err := netlink.LinkSetUp(br); err != nil{
-		log.Println("Error bringing up interface")
-		return err
+	if err != nil && err != syscall.EEXIST {
+		log.Println("Error adding new bridge")
+		//Check error and whether the link exist already
 	}
 
-	l, err := netlink.LinkByName(sb.BridgeName)
-	if err != nil{
-		log.Println("Error finding link by name")
+	//Get link by name
+
+	l, err := netlink.LinkByName(netInfo.BridgeName)
+
+	if err != nil {
+		log.Println("Error finding device by name")
 		return err
 	}
-	// Make sure the link is of type bridge (netlink.Bridge)
+
+	// Make sure the link is of type bridge
+
 	newBr, ok := l.(*netlink.Bridge)
 
-	if !ok{
-		return fmt.Errorf("%q already exists but is not a bridge", sb.BridgeName)
+	if !ok {
+		log.Println("Link name already exists and is of another type")
+		return err
 	}
 
-	netns, err := ns.GetNS(args.Netns)
-	
-	if err != nil{
+	//Get the network namespace path from args
+	networkNamespace, err := ns.GetNS(args.Netns)
+
+	if err != nil {
+		log.Println("Error getting namespace from argument path")
 		return err
 	}
 
 	hostIface := &current.Interface{}
+	var handler = func(hostns ns.NetNS) error {
 
-	// this handler func creates a vethpair and we get the name of the host side veth
-	var handler = func(hostNS ns.NetNS)error{
-		//hostVeth, containerVeth, err := ip.SetupVeth(args.IfName, 1500, hostNS)
-		// Creates a veth pair, sets mtu and moves one side of the veth pair to hostNS
-		hostVeth, _, err := ip.SetupVeth(args.IfName, 1500, hostNS)
-		if err != nil{
-			return err
-		}
-	
-		//Get the name of the host side of veth pair
-		hostIface.Name = hostVeth.Name
+			//Create veth pair
+			hostVeth, containerVeth, err := ip.SetupVeth(args.IfName, 1500, hostns)
+			if err != nil {
+				log.Println("Error creating veth pair")
+				return err
+			}
 
-		ipv4Addr, ipv4Net, err := net.ParseCIDR(sb.IP)
-		if err != nil{
-			log.Println("Error parsing ip address")
-		}
-		ipv4Net.IP = ipv4Addr
-		addr:=&netlink.Addr{IPNet: ipv4Net, Label:""}
-		// assign the address to the bridge
-		if err := netlink.AddrAdd(newBr,addr); err != nil{
-			return err
-		}
+			hostIface.Name = hostVeth.Name
+			// Parse CIDR and assign ip
+			conVethLink, err := netlink.LinkByName(containerVeth.Name)
+
+			if err != nil {
+				log.Println("Error finding container veth by name")
+				return err
+			}
+
+			addr, err := netlink.ParseAddr(netInfo.VethConIP)
+			if err != nil {
+				log.Println("Error parsing container veth name ip address")
+				return err
+			}
+
+			// add ipaddr to container veth end of the link
+			if err = netlink.AddrAdd(conVethLink, addr); err != nil {
+				log.Println("Error adding address to link")
+				return err
+			}
+
+			//Bring containerVeth up
+			if err = netlink.LinkSetUp(conVethLink); err != nil {
+				log.Println("Error bringin container veth up")
+			}
+			// Bring Network Namespace loopback up
+			lo, err := netlink.LinkByName("lo")
+			if err != nil{
+				log.Println("Error finding loopback in netns")
+				return err
+			}
+			if err = netlink.LinkSetUp(lo); err != nil{
+				log.Println("Error bringing up loopback interface")
+				return err
+			}
+
+
+		// add reroute from container veth to bridge
+		// first create route and then add the route
+		//rt := netlink.Route{Src: conVethLink}
 		return nil
 	}
 
-
-	if err := netns.Do(handler); err != nil{
+	if err := networkNamespace.Do(handler); err != nil {
+		log.Println("Error applying function in network namespace")
 		return err
 	}
-
-
 
 	hostVeth, err := netlink.LinkByName(hostIface.Name)
-
-	if err != nil{
+	if err != nil {
+		log.Println("Error finding host veth by name")
 		return err
 	}
 
-	if err := netlink.LinkSetMaster(hostVeth, newBr); err != nil{
+	//bring the veth end of the pair that is attached to the bridge up
+	if err := netlink.LinkSetUp(hostVeth); err != nil{
+		log.Println("Error bringing host veth up")
+	}
+	// Setting bridge as master 
+
+	if err := netlink.LinkSetMaster(hostVeth, newBr); err != nil {
+		log.Println("Error setting up host veth to master bridge")
+		return err
+	}
+
+	// same as ip link set $BRIDGE_NAME up
+	if err := netlink.LinkSetUp(newBr); err != nil {
 		return err
 	}
 
