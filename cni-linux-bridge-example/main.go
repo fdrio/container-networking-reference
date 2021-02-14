@@ -157,6 +157,8 @@ func cmdAdd(args *skel.CmdArgs) error {
 		return err
 	}
 
+
+	//TODO add route between veth pair on the container side to the linux bridge
 	return nil
 }
 
