@@ -1,4 +1,4 @@
-package main
+/*package main
 
 import (
 	"encoding/json"
@@ -31,7 +31,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 		return err
 	}
 	fmt.Println(netInfo)
-
+/////////////////////////////////// Add Bridge /////////////////////////////////// 
 	br := &netlink.Bridge{
 		LinkAttrs: netlink.LinkAttrs{
 			Name: netInfo.BridgeName,
@@ -50,7 +50,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 		log.Println("Error adding new bridge")
 		//Check error and whether the link exist already
 	}
-
+////////////////////////////////////////////////////////////////////// 
 	//Get link by name
 
 	l, err := netlink.LinkByName(netInfo.BridgeName)
@@ -60,16 +60,21 @@ func cmdAdd(args *skel.CmdArgs) error {
 		return err
 	}
 
-	// Make sure the link is of type bridge
+/////////////////////////////////// Link to Bridge  & add ip ///////////////////////////////////  
+
+// Make sure the link is of type bridge
 
 	newBr, ok := l.(*netlink.Bridge)
-
 	if !ok {
 		log.Println("Link name already exists and is of another type")
 		return err
 	}
 
-	//Get the network namespace path from args
+	
+///////////////////////////////////////////////////////////////////////////////////////////////  
+
+
+//Get the network namespace path from args
 	networkNamespace, err := ns.GetNS(args.Netns)
 
 	if err != nil {
@@ -78,6 +83,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 	}
 
 	hostIface := &current.Interface{}
+
 	var handler = func(hostns ns.NetNS) error {
 
 			//Create veth pair
@@ -90,7 +96,6 @@ func cmdAdd(args *skel.CmdArgs) error {
 			hostIface.Name = hostVeth.Name
 			// Parse CIDR and assign ip
 			conVethLink, err := netlink.LinkByName(containerVeth.Name)
-
 			if err != nil {
 				log.Println("Error finding container veth by name")
 				return err
@@ -101,7 +106,8 @@ func cmdAdd(args *skel.CmdArgs) error {
 				log.Println("Error parsing container veth name ip address")
 				return err
 			}
-
+	
+			
 			// add ipaddr to container veth end of the link
 			if err = netlink.AddrAdd(conVethLink, addr); err != nil {
 				log.Println("Error adding address to link")
@@ -122,11 +128,25 @@ func cmdAdd(args *skel.CmdArgs) error {
 				log.Println("Error bringing up loopback interface")
 				return err
 			}
+		
+			// Get bridge ipnet 
+			brnet, err := netlink.ParseIPNet(netInfo.BridgeIP)
+			if err != nil{
+				log.Println("Error parsing bridge ip net")
+				return err
+			}
+			// Add route from inside network namespace
+			route := netlink.Route{
+				LinkIndex: conVethLink.Attrs().Index, 
+				Src: addr.IP,
+				Dst: brnet,	
+			}
 
-
-		// add reroute from container veth to bridge
-		// first create route and then add the route
-		//rt := netlink.Route{Src: conVethLink}
+			if err := netlink.RouteAdd(&route); err != nil{
+				log.Println("Error adding route")
+				return err
+			}
+			
 		return nil
 	}
 
@@ -157,8 +177,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 		return err
 	}
 
-
-	//TODO add route between veth pair on the container side to the linux bridge
+	
 	return nil
 }
 
@@ -173,3 +192,4 @@ func cmdDel(args *skel.CmdArgs) error {
 func main() {
 	skel.PluginMain(cmdAdd, cmdCheck, cmdDel, version.All, "Hello World CNI")
 }
+*/

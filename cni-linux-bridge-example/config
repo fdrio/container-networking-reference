@@ -1,6 +1,5 @@
 {
 	"name": "mynet",
-	"bridgeName": "test",
-	"bridgeIP": "192.0.2.1/24",
-	"vethConIP": "192.0.2.0/24"
+	"BridgeName": "test",
+	"IP": "192.0.2.15/24"
 }
